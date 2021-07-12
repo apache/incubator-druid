@@ -283,7 +283,8 @@ public class DruidJoinRule extends RelOptRule
 
   private static boolean isLeftExpression(final RexNode rexNode, final int numLeftFields)
   {
-    return ImmutableBitSet.range(numLeftFields).contains(RelOptUtil.InputFinder.bits(rexNode));
+    ImmutableBitSet inputBitSet = RelOptUtil.InputFinder.bits(rexNode);
+    return !inputBitSet.isEmpty() && ImmutableBitSet.range(numLeftFields).contains(inputBitSet);
   }
 
   private static boolean isRightInputRef(final RexNode rexNode, final int numLeftFields)
