@@ -908,7 +908,9 @@ public abstract class SeekableStreamSupervisor<PartitionIdType, SequenceOffsetTy
                     notice.handle();
                     Instant handleNoticeEndTime = Instant.now();
                     Duration timeElapsed = Duration.between(handleNoticeStartTime, handleNoticeEndTime);
-                    log.debug("Handled notice [%s] from notices queue in [%d] ms, current notices queue size [%d]", notice.getClass().getName(), timeElapsed.toMillis(), getNoticesQueueSize());
+                    String noticeType = notice.getClass().getName();
+                    log.debug("Handled notice [%s] from notices queue in [%d] ms, current notices queue size [%d]", noticeType, timeElapsed.toMillis(), getNoticesQueueSize());
+                    emitNoticeProcessTime(noticeType, timeElapsed.toMillis());
                   }
                   catch (Throwable e) {
                     stateManager.recordThrowableEvent(e);
@@ -3588,6 +3590,7 @@ public abstract class SeekableStreamSupervisor<PartitionIdType, SequenceOffsetTy
 
   /**
    * default implementation, schedules periodic fetch of latest offsets and {@link #emitLag} reporting for Kafka and Kinesis
+   * and periodic reporting of {@Link #emitNoticesQueueSize} for various data sources.
    */
   protected void scheduleReporting(ScheduledExecutorService reportingExec)
   {
@@ -3606,6 +3609,12 @@ public abstract class SeekableStreamSupervisor<PartitionIdType, SequenceOffsetTy
 
     reportingExec.scheduleAtFixedRate(
         this::emitLag,
+        ioConfig.getStartDelay().getMillis() + INITIAL_EMIT_LAG_METRIC_DELAY_MILLIS, // wait for tasks to start up
+        spec.getMonitorSchedulerConfig().getEmitterPeriod().getMillis(),
+        TimeUnit.MILLISECONDS
+    );
+    reportingExec.scheduleAtFixedRate(
+        this::emitNoticesQueueSize,
         ioConfig.getStartDelay().getMillis() + INITIAL_EMIT_LAG_METRIC_DELAY_MILLIS, // wait for tasks to start up
         spec.getMonitorSchedulerConfig().getEmitterPeriod().getMillis(),
         TimeUnit.MILLISECONDS
@@ -3656,6 +3665,38 @@ public abstract class SeekableStreamSupervisor<PartitionIdType, SequenceOffsetTy
     final SequenceOffsetType earliestOffset = getOffsetFromStreamForPartition(partition, true);
     return earliestOffset != null
            && makeSequenceNumber(earliestOffset).compareTo(makeSequenceNumber(offsetFromMetadata)) <= 0;
+  }
+
+  protected void emitNoticeProcessTime(String noticeType, long timeInMillis)
+  {
+    try {
+      emitter.emit(
+          ServiceMetricEvent.builder()
+              .setDimension("noticeType", noticeType)
+              .build("ingest/notices/time", timeInMillis)
+      );
+    }
+    catch (Exception e) {
+      log.warn(e, "Unable to emit notices process time");
+    }
+  }
+
+  protected void emitNoticesQueueSize()
+  {
+    if (spec.isSuspended()) {
+      // don't emit metrics if supervisor is suspended
+      return;
+    }
+    try {
+      emitter.emit(
+          ServiceMetricEvent.builder()
+              .setDimension("dataSource", dataSource)
+              .build("ingest/notices/queueSize", getNoticesQueueSize())
+      );
+    }
+    catch (Exception e) {
+      log.warn(e, "Unable to emit notices queue size");
+    }
   }
 
   protected void emitLag()
